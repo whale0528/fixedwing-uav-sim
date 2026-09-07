@@ -1,0 +1,10 @@
+# MATLAB 构建产物
+slprj/
+*.slxc
+
+# MATLAB 临时文件
+*.asv
+*.autosave
+
+# 仿真数据缓存（按需保留原始 .mat）
+*.slxc.report
