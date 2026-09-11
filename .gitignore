@@ -8,3 +8,6 @@ slprj/
 
 # 仿真数据缓存（按需保留原始 .mat）
 *.slxc.report
+
+# LLM 密钥（绝不入库）
+llm_key.txt
