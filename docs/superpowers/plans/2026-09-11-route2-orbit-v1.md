@@ -317,7 +317,283 @@ git add landmarks.xlsx .gitignore && git commit -m "feat: 添加地标表（塔A
 
 ---
 
-## 任务 3：确定性校验层 `check_orbit_params.m`（TDD）
+## 任务 3：圆航点生成 `make_orbit_plan.m`（TDD）
+
+**文件：**
+- 测试：`tests/test_make_orbit_plan.m`
+- 创建：`make_orbit_plan.m`
+
+- [ ] **步骤 1：写失败测试** `tests/test_make_orbit_plan.m`
+
+```matlab
+function tests = test_make_orbit_plan
+    tests = functiontests(localfunctions);
+end
+
+function params = make_p
+    params = struct('center', [8000 2000], 'radius_m', 300, ...
+                    'direction', 'CW', 'turns', 3);
+end
+
+function testRowStructure(testCase)
+    [fly_pt, num_fly_pt] = make_orbit_plan(make_p(), [0 0], deg2rad(77.8));
+    testCase.verifyEqual(size(fly_pt, 2), 5);
+    testCase.verifyEqual(num_fly_pt, size(fly_pt, 1));
+    testCase.verifyEqual(fly_pt(end, 4:5), [-10000 -10000]);   % 终止行
+    testCase.verifyEqual(fly_pt(1, 1:2), [0 0]);                % 首行=起点位置（类型取决于切入首段是直线还是圆弧）
+end
+
+function testCircleCentersAndRadius(testCase)
+    [fly_pt, ~] = make_orbit_plan(make_p(), [0 0], deg2rad(77.8));
+    cen = fly_pt(fly_pt(:,4)==2 & fly_pt(:,5)>2, :);            % 所有圆心行
+    testCase.verifyTrue(all(cen(:,5)==300));                    % info=半径
+    on_target = all(cen(:,1:2) == [8000 2000], 2);              % 圆心在目标中心的圆心行数 = 圈数
+    testCase.verifyEqual(sum(on_target), 3);
+end
+
+function testCircleBearingProgression(testCase)
+    p = make_p();
+    [fly_pt, ~] = make_orbit_plan(p, [0 0], deg2rad(77.8));
+    cen_idx = find(all(fly_pt(:,1:2) == p.center, 2));
+    st_idx = cen_idx - 1;                                       % 圆弧起点行 = 圆心行的前一行
+    th = atan2(fly_pt(st_idx,2)-p.center(2), fly_pt(st_idx,1)-p.center(1));
+    dth = mod(diff(th), 2*pi);                                  % CW：每圈起点方位递增 ε=0.05
+    testCase.verifyLessThan(max(abs(dth - 0.05)), 1e-6);
+end
+
+function testDirectionInfoCorrect(testCase)
+    [fly_pt, ~] = make_orbit_plan(make_p(), [0 0], deg2rad(77.8));
+    cen_idx = find(all(fly_pt(:,1:2) == [8000 2000], 2));
+    testCase.verifyTrue(all(fly_pt(cen_idx-1, 5) == 1));        % CW → dir_type=1
+    p2 = make_p(); p2.direction = 'CCW';
+    [fly_pt2, ~] = make_orbit_plan(p2, [0 0], deg2rad(77.8));
+    cen_idx2 = find(all(fly_pt2(:,1:2) == [8000 2000], 2));
+    testCase.verifyTrue(all(fly_pt2(cen_idx2-1, 5) == 2));      % CCW → dir_type=2
+end
+
+function testRadiusTooSmallErrors(testCase)
+    p = make_p(); p.radius_m = 200;
+    testCase.verifyError(@() make_orbit_plan(p, [0 0], 0), 'make_orbit_plan:radius');
+end
+```
+
+- [ ] **步骤 2：运行测试确认失败**
+
+```matlab
+runtests('tests')
+```
+
+预期：`test_make_orbit_plan` 全部 FAIL（函数不存在）。
+
+- [ ] **步骤 3：实现 `make_orbit_plan.m`**
+
+```matlab
+function [fly_pt, num_fly_pt] = make_orbit_plan(params, start_xy, start_heading)
+% MAKE_ORBIT_PLAN 生成"切入 + N 圈圆 + 切出"航点表（fly_pt 已过滤格式）
+% params        : struct（与任务 5 的 check_orbit_params 输出同构；本任务测试用手工构造），字段 center(1x2)、radius_m、
+%                 direction('CW'/'CCW')、turns(正整数)
+% start_xy      : 当前水平位置 [x_north, y_east]（m）
+% start_heading : 当前航向 psi（rad，北偏东为正）
+% 输出 fly_pt    : N行x5 航点表，格式与 fly_planfjy.mat 一致：
+%   [x_north, y_east, z, type, info]；type=1 直线终点；type=2+info∈{1,2} 圆弧起点(1=CW,2=CCW)；
+%   type=2+info>2 圆心行(info=半径)；终止行 [.., -10000, -10000]。
+% 设计要点：每圈扫角 2π-ε（ε=0.05 rad），终点行与下一圈起点行坐标重合，
+% 由 dubins.filter_waypoints 合并为一行，满足 fly_phase 的切换条件 sweep >= total_sweep - 0.01。
+    Vc = 34; g = 9.8; roll_max = deg2rad(30);
+    r = params.radius_m; c = params.center;
+    r_min = Vc^2 / (g * tan(roll_max));
+    if r < 1.2*r_min
+        error('make_orbit_plan:radius', '半径 %.0f m 小于安全下限 %.0f m', r, 1.2*r_min);
+    end
+    if params.turns ~= round(params.turns) || params.turns < 1 || params.turns > 50
+        error('make_orbit_plan:turns', '圈数 %g 需为 [1,50] 内整数', params.turns);
+    end
+    dir_type = 2*strcmpi(params.direction,'CCW') + 1*strcmpi(params.direction,'CW');
+    if dir_type == 0, error('make_orbit_plan:direction', 'direction 必须是 CW 或 CCW'); end
+    sgn = 1 - 2*(dir_type == 1);      % CCW=+1（方位角递增），CW=-1
+    eps = 0.05;                       % 每圈航点簿记裕量 (rad)
+    z = 300;                          % 与现有 fly_planfjy 相同的平飞高度约定
+
+    % ---- 1) 切入：Dubins 从起点到圆上最近方位切点（rho=r，曲率连续）----
+    th_near = atan2(start_xy(2) - c(2), start_xy(1) - c(1));
+    p_entry = c + r*[cos(th_near), sin(th_near)];
+    psi_entry = th_near + sgn*pi/2;                           % 切向航向
+    dpath = dubins.core([start_xy, start_heading], [p_entry, psi_entry], r);
+    if ~dpath.valid, error('make_orbit_plan:dubins', 'Dubins 切入无解'); end
+
+    fly_pt = [start_xy, z, 1, 0];                             % 首行：当前位置（与现有格式一致）
+    fly_pt = dubins.append_segments(fly_pt, [p_entry, psi_entry], dpath, z, r);
+
+    % ---- 2) N 圈圆：每圈 2π-ε；终点行与下一圈起点行坐标重合，过滤时合并 ----
+    th0 = th_near;                                            % 第 1 圈起点方位
+    for k = 1:params.turns
+        th_s = th0 - sgn*(k-1)*eps;                           % 本圈起点方位
+        th_x = th_s + sgn*(2*pi - eps);                       % 本圈终点方位
+        p_s = c + r*[cos(th_s), sin(th_s)];
+        p_x = c + r*[cos(th_x), sin(th_x)];
+        fly_pt = [fly_pt; p_s, z, 2, dir_type; c, z, 2, r; p_x, z, 1, 0];
+    end
+    th_last = th0 - sgn*params.turns*eps;                     % 末圈终点方位
+    p_last = c + r*[cos(th_last), sin(th_last)];
+
+    % ---- 3) 切出直线 500 m + 终止行 ----
+    psi_exit = th_last + sgn*pi/2;
+    p_out = p_last + 500*[cos(psi_exit), sin(psi_exit)];
+    fly_pt = [fly_pt; p_out, z, 1, 0; p_out(1), p_out(2), z, -10000, -10000];
+
+    % ---- 4) 过滤合并（重合的终点行/起点行 → 单行；清杂点；保留圆心行）----
+    fly_pt = dubins.filter_waypoints(fly_pt);
+    num_fly_pt = size(fly_pt, 1);
+end
+```
+
+- [ ] **步骤 4：运行测试确认通过**
+
+```matlab
+runtests('tests')
+```
+
+预期：`test_make_orbit_plan` 5 个用例全部 PASS。
+
+- [ ] **步骤 5：Commit**
+
+```bash
+git add tests/test_make_orbit_plan.m make_orbit_plan.m && git commit -m "feat: 圆航点生成 make_orbit_plan（切入 Dubins + N圈 2π-ε + 切出）"
+```
+
+---
+
+## 任务 4：仿真执行与结果判定（模型零改动，方向约定实测）
+
+**文件：**
+- 创建：`check_orbit_flight.m`、`run_orbit_sim.m`
+- 测试：`tests/test_check_orbit_flight.m`（合成数据，不跑仿真）
+
+- [ ] **步骤 1：实现 `check_orbit_flight.m`**
+
+```matlab
+function report = check_orbit_flight(out, params)
+% CHECK_ORBIT_FLIGHT 从仿真输出判定 orbit 执行结果
+% out.simout 约定（同 plotmake.m）：Data(:,1)=x_north, Data(:,2)=x_east, Data(:,3)=x_down
+    report = struct('turns', 0, 'radius_rmse', NaN, 'direction', '', ...
+                    'bank_max_deg', NaN, 'complete', false);
+    xn = out.simout.Data(:,1); xe = out.simout.Data(:,2);
+    c = params.center; r = params.radius_m;
+    d = hypot(xn - c(1), xe - c(2));
+    in_band = abs(d - r) <= 0.3*r;
+    if ~any(in_band), return; end
+    th = unwrap(atan2(xe(in_band) - c(2), xn(in_band) - c(1)));
+    report.turns = (max(th) - min(th)) / (2*pi);
+    report.radius_rmse = sqrt(mean((d(in_band) - r).^2));
+    report.direction = ternary(mean(diff(th)) > 0, 'CCW', 'CW');
+    if isfield(out, 'phi')
+        report.bank_max_deg = max(abs(out.phi.Data)) * 180/pi;
+    end
+    report.complete = report.turns >= params.turns - 0.1 && report.radius_rmse <= 0.1*r;
+end
+
+function r = ternary(cond, a, b)
+    if cond, r = a; else, r = b; end
+end
+```
+
+- [ ] **步骤 2：实现 `run_orbit_sim.m`**
+
+```matlab
+function report = run_orbit_sim(params, start_xy, start_heading, stop_time)
+% RUN_ORBIT_SIM params → 圆航点 → base 工作区 → sim('b0307') → 判定（与 LLM 无关）
+    arguments
+        params (1,1) struct
+        start_xy (1,2) double
+        start_heading (1,1) double
+        stop_time (1,1) double = 600
+    end
+    [fly_pt, num_fly_pt] = make_orbit_plan(params, start_xy, start_heading);
+    save('fly_planfjy.mat', 'fly_pt', 'num_fly_pt');   % 持久化，与现有工作流兼容
+    assignin('base', 'fly_pt', fly_pt);                % 模型 Constant 块读 base 工作区
+    assignin('base', 'num_fly_pt', num_fly_pt);
+    load_system('b0307');                              % set_param 前必须先载入模型
+    set_param('b0307', 'StopTime', num2str(stop_time));
+    out = sim('b0307');
+    assignin('base', 'out', out);                      % plotmake 脚本读 base 工作区的 out
+    report = check_orbit_flight(out, params);
+end
+```
+
+- [ ] **步骤 3：写判定函数的合成数据测试** `tests/test_check_orbit_flight.m`
+
+```matlab
+function tests = test_check_orbit_flight
+    tests = functiontests(localfunctions);
+end
+
+function out = synth_out(c, r, turns)
+% 合成一个绕点 c、半径 r 的理想圆轨迹输出（turns 圈，方位角从 0 递增）
+    th = linspace(0, 2*pi*turns, 4000)';
+    xn = c(1) + r*cos(th); xe = c(2) + r*sin(th);
+    out = struct('simout', struct('Data', [xn, xe, zeros(size(xn))]));
+end
+
+function testCountsThreeLoops(testCase)
+    p = struct('center', [8000 2000], 'radius_m', 300, 'turns', 3);
+    out = synth_out(p.center, p.radius_m, 3);
+    rep = check_orbit_flight(out, p);
+    testCase.verifyEqual(round(rep.turns, 2), 3);
+    testCase.verifyLessThan(rep.radius_rmse, 1e-6);
+    testCase.verifyTrue(rep.complete);
+    testCase.verifyEqual(rep.direction, 'CCW');
+end
+
+function testDirectionCW(testCase)
+    p = struct('center', [8000 2000], 'radius_m', 300, 'turns', 1);
+    th = linspace(0, -2*pi, 4000)';    % 方位角递减 = CW
+    xn = p.center(1) + 300*cos(th); xe = p.center(2) + 300*sin(th);
+    out = struct('simout', struct('Data', [xn, xe, zeros(size(xn))]));
+    rep = check_orbit_flight(out, p);
+    testCase.verifyEqual(rep.direction, 'CW');
+end
+```
+
+- [ ] **步骤 4：运行测试确认通过**
+
+```matlab
+runtests('tests')
+```
+
+预期：`test_check_orbit_flight` 3 个用例全部 PASS。
+
+- [ ] **步骤 5：实测 a——1 圈 CW 方向约定验证**（MATLAB 命令窗，需活跃 MATLAB 会话）
+
+```matlab
+init;
+p = struct('center', [8000 2000], 'radius_m', 300, 'direction', 'CW', 'turns', 1);
+rep = run_orbit_sim(p, [x_0, y_0], psi_0, 600);
+rep   % 预期 rep.direction == 'CW' 且 rep.turns 在 0.9~1.1 之间
+```
+
+预期：`rep.complete == true`。若 `direction == 'CCW'`（飞机实际反向绕圈）或 turns≈0（未锁上圆），说明 dir_type/sgn 映射与 fly_phase 约定相反——修 `make_orbit_plan.m` 的 `dir_type` 定义，重新跑直到通过。**这是本计划唯一需要实测校准的约定点，不得跳过。**
+
+- [ ] **步骤 6：实测 b——3 圈完整飞行 + 轨迹图**
+
+```matlab
+init;
+p = struct('center', [8000 2000], 'radius_m', 300, 'direction', 'CW', 'turns', 3);
+rep = run_orbit_sim(p, [x_0, y_0], psi_0, 600);
+fprintf('圈数 %.2f / 3, RMSE %.1f m, 完成 %d\n', rep.turns, rep.radius_rmse, rep.complete);
+plotmake;
+```
+
+预期：`rep.complete == true`，`rep.turns ≈ 3`，RMSE 在风扰 0 时 < 10 m 量级；轨迹图可见切入弧线 + 3 圈圆 + 切出直线。若 RMSE 大，先检查控制器/制导是否受风场默认值影响（init.m 里 W_north/W_east/W_down 默认 0）。
+
+- [ ] **步骤 7：Commit**
+
+```bash
+git add check_orbit_flight.m run_orbit_sim.m tests/test_check_orbit_flight.m && git commit -m "feat: 仿真执行与结果判定（check_orbit_flight/run_orbit_sim），CW/CCW 约定实测通过"
+```
+
+---
+
+## 任务 5：确定性校验层 `check_orbit_params.m`（TDD）
 
 **文件：**
 - 测试：`tests/test_check_orbit_params.m`
@@ -504,282 +780,6 @@ runtests('tests')
 
 ```bash
 git add tests/test_check_orbit_params.m check_orbit_params.m && git commit -m "feat: 确定性校验层 check_orbit_params（schema/查表/范围/默认值）"
-```
-
----
-
-## 任务 4：圆航点生成 `make_orbit_plan.m`（TDD）
-
-**文件：**
-- 测试：`tests/test_make_orbit_plan.m`
-- 创建：`make_orbit_plan.m`
-
-- [ ] **步骤 1：写失败测试** `tests/test_make_orbit_plan.m`
-
-```matlab
-function tests = test_make_orbit_plan
-    tests = functiontests(localfunctions);
-end
-
-function params = make_p
-    params = struct('center', [8000 2000], 'radius_m', 300, ...
-                    'direction', 'CW', 'turns', 3);
-end
-
-function testRowStructure(testCase)
-    [fly_pt, num_fly_pt] = make_orbit_plan(make_p(), [0 0], deg2rad(77.8));
-    testCase.verifyEqual(size(fly_pt, 2), 5);
-    testCase.verifyEqual(num_fly_pt, size(fly_pt, 1));
-    testCase.verifyEqual(fly_pt(end, 4:5), [-10000 -10000]);   % 终止行
-    testCase.verifyEqual(fly_pt(1, 1:2), [0 0]);                % 首行=起点位置（类型取决于切入首段是直线还是圆弧）
-end
-
-function testCircleCentersAndRadius(testCase)
-    [fly_pt, ~] = make_orbit_plan(make_p(), [0 0], deg2rad(77.8));
-    cen = fly_pt(fly_pt(:,4)==2 & fly_pt(:,5)>2, :);            % 所有圆心行
-    testCase.verifyTrue(all(cen(:,5)==300));                    % info=半径
-    on_target = all(cen(:,1:2) == [8000 2000], 2);              % 圆心在目标中心的圆心行数 = 圈数
-    testCase.verifyEqual(sum(on_target), 3);
-end
-
-function testCircleBearingProgression(testCase)
-    p = make_p();
-    [fly_pt, ~] = make_orbit_plan(p, [0 0], deg2rad(77.8));
-    cen_idx = find(all(fly_pt(:,1:2) == p.center, 2));
-    st_idx = cen_idx - 1;                                       % 圆弧起点行 = 圆心行的前一行
-    th = atan2(fly_pt(st_idx,2)-p.center(2), fly_pt(st_idx,1)-p.center(1));
-    dth = mod(diff(th), 2*pi);                                  % CW：每圈起点方位递增 ε=0.05
-    testCase.verifyLessThan(max(abs(dth - 0.05)), 1e-6);
-end
-
-function testDirectionInfoCorrect(testCase)
-    [fly_pt, ~] = make_orbit_plan(make_p(), [0 0], deg2rad(77.8));
-    cen_idx = find(all(fly_pt(:,1:2) == [8000 2000], 2));
-    testCase.verifyTrue(all(fly_pt(cen_idx-1, 5) == 1));        % CW → dir_type=1
-    p2 = make_p(); p2.direction = 'CCW';
-    [fly_pt2, ~] = make_orbit_plan(p2, [0 0], deg2rad(77.8));
-    cen_idx2 = find(all(fly_pt2(:,1:2) == [8000 2000], 2));
-    testCase.verifyTrue(all(fly_pt2(cen_idx2-1, 5) == 2));      % CCW → dir_type=2
-end
-
-function testRadiusTooSmallErrors(testCase)
-    p = make_p(); p.radius_m = 200;
-    testCase.verifyError(@() make_orbit_plan(p, [0 0], 0), 'make_orbit_plan:radius');
-end
-```
-
-- [ ] **步骤 2：运行测试确认失败**
-
-```matlab
-runtests('tests')
-```
-
-预期：`test_make_orbit_plan` 全部 FAIL（函数不存在）。
-
-- [ ] **步骤 3：实现 `make_orbit_plan.m`**
-
-```matlab
-function [fly_pt, num_fly_pt] = make_orbit_plan(params, start_xy, start_heading)
-% MAKE_ORBIT_PLAN 生成"切入 + N 圈圆 + 切出"航点表（fly_pt 已过滤格式）
-% params        : struct（check_orbit_params 的输出），字段 center(1x2)、radius_m、
-%                 direction('CW'/'CCW')、turns(正整数)
-% start_xy      : 当前水平位置 [x_north, y_east]（m）
-% start_heading : 当前航向 psi（rad，北偏东为正）
-% 输出 fly_pt    : N行x5 航点表，格式与 fly_planfjy.mat 一致：
-%   [x_north, y_east, z, type, info]；type=1 直线终点；type=2+info∈{1,2} 圆弧起点(1=CW,2=CCW)；
-%   type=2+info>2 圆心行(info=半径)；终止行 [.., -10000, -10000]。
-% 设计要点：每圈扫角 2π-ε（ε=0.05 rad），终点行与下一圈起点行坐标重合，
-% 由 dubins.filter_waypoints 合并为一行，满足 fly_phase 的切换条件 sweep >= total_sweep - 0.01。
-    Vc = 34; g = 9.8; roll_max = deg2rad(30);
-    r = params.radius_m; c = params.center;
-    r_min = Vc^2 / (g * tan(roll_max));
-    if r < 1.2*r_min
-        error('make_orbit_plan:radius', '半径 %.0f m 小于安全下限 %.0f m', r, 1.2*r_min);
-    end
-    if params.turns ~= round(params.turns) || params.turns < 1 || params.turns > 50
-        error('make_orbit_plan:turns', '圈数 %g 需为 [1,50] 内整数', params.turns);
-    end
-    dir_type = 2*strcmpi(params.direction,'CCW') + 1*strcmpi(params.direction,'CW');
-    if dir_type == 0, error('make_orbit_plan:direction', 'direction 必须是 CW 或 CCW'); end
-    sgn = 1 - 2*(dir_type == 1);      % CCW=+1（方位角递增），CW=-1
-    eps = 0.05;                       % 每圈航点簿记裕量 (rad)
-    z = 300;                          % 与现有 fly_planfjy 相同的平飞高度约定
-
-    % ---- 1) 切入：Dubins 从起点到圆上最近方位切点（rho=r，曲率连续）----
-    th_near = atan2(start_xy(2) - c(2), start_xy(1) - c(1));
-    p_entry = c + r*[cos(th_near), sin(th_near)];
-    psi_entry = th_near + sgn*pi/2;                           % 切向航向
-    dpath = dubins.core([start_xy, start_heading], [p_entry, psi_entry], r);
-    if ~dpath.valid, error('make_orbit_plan:dubins', 'Dubins 切入无解'); end
-
-    fly_pt = [start_xy, z, 1, 0];                             % 首行：当前位置（与现有格式一致）
-    fly_pt = dubins.append_segments(fly_pt, [p_entry, psi_entry], dpath, z, r);
-
-    % ---- 2) N 圈圆：每圈 2π-ε；终点行与下一圈起点行坐标重合，过滤时合并 ----
-    th0 = th_near;                                            % 第 1 圈起点方位
-    for k = 1:params.turns
-        th_s = th0 - sgn*(k-1)*eps;                           % 本圈起点方位
-        th_x = th_s + sgn*(2*pi - eps);                       % 本圈终点方位
-        p_s = c + r*[cos(th_s), sin(th_s)];
-        p_x = c + r*[cos(th_x), sin(th_x)];
-        fly_pt = [fly_pt; p_s, z, 2, dir_type; c, z, 2, r; p_x, z, 1, 0];
-    end
-    th_last = th0 - sgn*params.turns*eps;                     % 末圈终点方位
-    p_last = c + r*[cos(th_last), sin(th_last)];
-
-    % ---- 3) 切出直线 500 m + 终止行 ----
-    psi_exit = th_last + sgn*pi/2;
-    p_out = p_last + 500*[cos(psi_exit), sin(psi_exit)];
-    fly_pt = [fly_pt; p_out, z, 1, 0; p_out(1), p_out(2), z, -10000, -10000];
-
-    % ---- 4) 过滤合并（重合的终点行/起点行 → 单行；清杂点；保留圆心行）----
-    fly_pt = dubins.filter_waypoints(fly_pt);
-    num_fly_pt = size(fly_pt, 1);
-end
-```
-
-- [ ] **步骤 4：运行测试确认通过**
-
-```matlab
-runtests('tests')
-```
-
-预期：`test_make_orbit_plan` 5 个用例全部 PASS。
-
-- [ ] **步骤 5：Commit**
-
-```bash
-git add tests/test_make_orbit_plan.m make_orbit_plan.m && git commit -m "feat: 圆航点生成 make_orbit_plan（切入 Dubins + N圈 2π-ε + 切出）"
-```
-
----
-
-## 任务 5：仿真执行与结果判定（模型零改动，方向约定实测）
-
-**文件：**
-- 创建：`check_orbit_flight.m`、`run_orbit_sim.m`
-- 测试：`tests/test_check_orbit_flight.m`（合成数据，不跑仿真）
-
-- [ ] **步骤 1：实现 `check_orbit_flight.m`**
-
-```matlab
-function report = check_orbit_flight(out, params)
-% CHECK_ORBIT_FLIGHT 从仿真输出判定 orbit 执行结果
-% out.simout 约定（同 plotmake.m）：Data(:,1)=x_north, Data(:,2)=x_east, Data(:,3)=x_down
-    report = struct('turns', 0, 'radius_rmse', NaN, 'direction', '', ...
-                    'bank_max_deg', NaN, 'complete', false);
-    xn = out.simout.Data(:,1); xe = out.simout.Data(:,2);
-    c = params.center; r = params.radius_m;
-    d = hypot(xn - c(1), xe - c(2));
-    in_band = abs(d - r) <= 0.3*r;
-    if ~any(in_band), return; end
-    th = unwrap(atan2(xe(in_band) - c(2), xn(in_band) - c(1)));
-    report.turns = (max(th) - min(th)) / (2*pi);
-    report.radius_rmse = sqrt(mean((d(in_band) - r).^2));
-    report.direction = ternary(mean(diff(th)) > 0, 'CCW', 'CW');
-    if isfield(out, 'phi')
-        report.bank_max_deg = max(abs(out.phi.Data)) * 180/pi;
-    end
-    report.complete = report.turns >= params.turns - 0.1 && report.radius_rmse <= 0.1*r;
-end
-
-function r = ternary(cond, a, b)
-    if cond, r = a; else, r = b; end
-end
-```
-
-- [ ] **步骤 2：实现 `run_orbit_sim.m`**
-
-```matlab
-function report = run_orbit_sim(params, start_xy, start_heading, stop_time)
-% RUN_ORBIT_SIM params → 圆航点 → base 工作区 → sim('b0307') → 判定（与 LLM 无关）
-    arguments
-        params (1,1) struct
-        start_xy (1,2) double
-        start_heading (1,1) double
-        stop_time (1,1) double = 600
-    end
-    [fly_pt, num_fly_pt] = make_orbit_plan(params, start_xy, start_heading);
-    save('fly_planfjy.mat', 'fly_pt', 'num_fly_pt');   % 持久化，与现有工作流兼容
-    assignin('base', 'fly_pt', fly_pt);                % 模型 Constant 块读 base 工作区
-    assignin('base', 'num_fly_pt', num_fly_pt);
-    load_system('b0307');                              % set_param 前必须先载入模型
-    set_param('b0307', 'StopTime', num2str(stop_time));
-    out = sim('b0307');
-    assignin('base', 'out', out);                      % plotmake 脚本读 base 工作区的 out
-    report = check_orbit_flight(out, params);
-end
-```
-
-- [ ] **步骤 3：写判定函数的合成数据测试** `tests/test_check_orbit_flight.m`
-
-```matlab
-function tests = test_check_orbit_flight
-    tests = functiontests(localfunctions);
-end
-
-function out = synth_out(c, r, turns)
-% 合成一个绕点 c、半径 r 的理想圆轨迹输出（turns 圈，方位角从 0 递增）
-    th = linspace(0, 2*pi*turns, 4000)';
-    xn = c(1) + r*cos(th); xe = c(2) + r*sin(th);
-    out = struct('simout', struct('Data', [xn, xe, zeros(size(xn))]));
-end
-
-function testCountsThreeLoops(testCase)
-    p = struct('center', [8000 2000], 'radius_m', 300, 'turns', 3);
-    out = synth_out(p.center, p.radius_m, 3);
-    rep = check_orbit_flight(out, p);
-    testCase.verifyEqual(round(rep.turns, 2), 3);
-    testCase.verifyLessThan(rep.radius_rmse, 1e-6);
-    testCase.verifyTrue(rep.complete);
-    testCase.verifyEqual(rep.direction, 'CCW');
-end
-
-function testDirectionCW(testCase)
-    p = struct('center', [8000 2000], 'radius_m', 300, 'turns', 1);
-    th = linspace(0, -2*pi, 4000)';    % 方位角递减 = CW
-    xn = p.center(1) + 300*cos(th); xe = p.center(2) + 300*sin(th);
-    out = struct('simout', struct('Data', [xn, xe, zeros(size(xn))]));
-    rep = check_orbit_flight(out, p);
-    testCase.verifyEqual(rep.direction, 'CW');
-end
-```
-
-- [ ] **步骤 4：运行测试确认通过**
-
-```matlab
-runtests('tests')
-```
-
-预期：`test_check_orbit_flight` 3 个用例全部 PASS。
-
-- [ ] **步骤 5：实测 5a——1 圈 CW 方向约定验证**（MATLAB 命令窗，需活跃 MATLAB 会话）
-
-```matlab
-init;
-p = struct('center', [8000 2000], 'radius_m', 300, 'direction', 'CW', 'turns', 1);
-rep = run_orbit_sim(p, [x_0, y_0], psi_0, 600);
-rep   % 预期 rep.direction == 'CW' 且 rep.turns 在 0.9~1.1 之间
-```
-
-预期：`rep.complete == true`。若 `direction == 'CCW'`（飞机实际反向绕圈）或 turns≈0（未锁上圆），说明 dir_type/sgn 映射与 fly_phase 约定相反——修 `make_orbit_plan.m` 的 `dir_type` 定义，重新跑直到通过。**这是本计划唯一需要实测校准的约定点，不得跳过。**
-
-- [ ] **步骤 6：实测 5b——3 圈完整飞行 + 轨迹图**
-
-```matlab
-init;
-p = struct('center', [8000 2000], 'radius_m', 300, 'direction', 'CW', 'turns', 3);
-rep = run_orbit_sim(p, [x_0, y_0], psi_0, 600);
-fprintf('圈数 %.2f / 3, RMSE %.1f m, 完成 %d\n', rep.turns, rep.radius_rmse, rep.complete);
-plotmake;
-```
-
-预期：`rep.complete == true`，`rep.turns ≈ 3`，RMSE 在风扰 0 时 < 10 m 量级；轨迹图可见切入弧线 + 3 圈圆 + 切出直线。若 RMSE 大，先检查控制器/制导是否受风场默认值影响（init.m 里 W_north/W_east/W_down 默认 0）。
-
-- [ ] **步骤 7：Commit**
-
-```bash
-git add check_orbit_flight.m run_orbit_sim.m tests/test_check_orbit_flight.m && git commit -m "feat: 仿真执行与结果判定（check_orbit_flight/run_orbit_sim），CW/CCW 约定实测通过"
 ```
 
 ---
@@ -1059,9 +1059,10 @@ git add tests/llm_phrasing_cases.m "UAV与LLM两条技术路线总结.md" && git
 
 | 风险 | 对策 |
 |---|---|
-| CW/CCW 方向约定与 fly_phase 相反 | 任务 5a 用 1 圈实测校准，是硬性检查点 |
+| CW/CCW 方向约定与 fly_phase 相反 | 任务 4 步骤 5 用 1 圈实测校准，是硬性检查点 |
 | LLM 输出 JSON 不稳 | temperature=0 + response_format=json_object + 3 次重试；离线 fixture 测试覆盖解析路径 |
 | 半径/速度参数不可行 | 校验层钳制（r≥250、v=34、alt=300），issue 全量打印 |
 | init.m 的 `clear all` 清掉参数 | 顺序固定：`init → llm2orbit → check → run_orbit_sim`（demo 脚本已固化） |
-| 仿真发散/飞不进圆 | 任务 5a/5b 早暴露；必要时调切入 Dubins 半径 rho 或换地标 |
+| 仿真发散/飞不进圆 | 任务 4 步骤 5/6 早暴露；必要时调切入 Dubins 半径 rho 或换地标 |
 | API 网络/计费 | 任务 0–5 完全离线；key 文件不入库 |
+
