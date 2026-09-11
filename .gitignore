@@ -11,3 +11,8 @@ slprj/
 
 # LLM 密钥（绝不入库）
 llm_key.txt
+
+# 航路规划生成物（跑 Astar/dubins 脚本自动重建）
+feasible_pts.mat
+fly_planfjy.mat
+raw_obs.mat
