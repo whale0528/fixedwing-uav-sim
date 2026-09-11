@@ -7,13 +7,22 @@ function [fly_pt, num_fly_pt] = make_orbit_plan(params, start_xy, start_heading)
 % 输出 fly_pt    : N行x5 航点表，格式与 fly_planfjy.mat 一致：
 %   [x_north, y_east, z, type, info]；type=1 直线终点；type=2+info∈{1,2} 圆弧起点(1=CW,2=CCW)；
 %   type=2+info>2 圆心行(info=半径)；终止行 [.., -10000, -10000]。
-% 设计要点：每圈扫角 2π-ε（ε=0.05 rad），终点行与下一圈起点行坐标重合，
-% 由 dubins.filter_waypoints 合并为一行，满足 fly_phase 的切换条件 sweep >= total_sweep - 0.01。
-    Vc = 34; g = 9.8; roll_max = deg2rad(30);
+%
+% 设计决策（经 3 次实测教训收敛）：
+% 1) 绕圈不用圆弧航点，改用正多边形（短直线段）逼近：
+%    模型 fly_phase 的圆弧切换按"扫角 + mod 卷绕 + 0.01 rad 提前量"判定，长弧串联时
+%    出现整圈弧被瞬间跳过、第 3 圈方向反转等不可靠行为；直线切换是位置判定（投影
+%    距离），且被原任务证明鲁棒。每圈 n_seg=48 边（7.5°/边，弦矢高 4.3 m，弦长 262 m）。
+% 2) 切入用"切向直线段"：Dubins 先到切线上、圆外 2.5r 处的预切点，再沿切线直线切入，
+%    避免 Dubins 末段弧与绕圈圆共圆心（"骑圆"）。
+% 3) 半径约束：巡航制导律 P 通道稳态上限 0.075 g（kdy=0.005 × 侧偏饱和 15 m），
+%    34 m/s 下最小可跟踪半径 ≈ 1573 m，故 r 下限取 1600 m（推荐 2000 m）。
+    Vc = 34; g = 9.8;
     r = params.radius_m; c = params.center;
-    r_min = Vc^2 / (g * tan(roll_max));
-    if r < 1.2*r_min
-        error('make_orbit_plan:radius', '半径 %.0f m 小于安全下限 %.0f m', r, 1.2*r_min);
+    r_min_track = Vc^2 / (0.005*15*g);   % ≈ 1573 m，制导稳态能力下限
+    if r < max(r_min_track, 1600)
+        error('make_orbit_plan:radius', ...
+              '半径 %.0f m 小于巡航制导可跟踪下限 %.0f m（稳态过载上限 0.075 g）', r, max(r_min_track, 1600));
     end
     if params.turns ~= round(params.turns) || params.turns < 1 || params.turns > 50
         error('make_orbit_plan:turns', '圈数 %g 需为 [1,50] 内整数', params.turns);
@@ -21,34 +30,35 @@ function [fly_pt, num_fly_pt] = make_orbit_plan(params, start_xy, start_heading)
     dir_type = 2*strcmpi(params.direction,'CCW') + 1*strcmpi(params.direction,'CW');
     if dir_type == 0, error('make_orbit_plan:direction', 'direction 必须是 CW 或 CCW'); end
     sgn = 1 - 2*(dir_type == 1);      % CCW=+1（方位角递增），CW=-1
-    eps = 0.05;                       % 每圈航点簿记裕量 (rad)
     z = 300;                          % 与现有 fly_planfjy 相同的平飞高度约定
 
-    % ---- 1) 切入：Dubins 从起点到圆上最近方位切点（rho=r，曲率连续）----
+    % ---- 1) 切入：Dubins 到切线上、圆外 2.5r 处的预切点，再沿切向直线切入 ----
     th_near = atan2(start_xy(2) - c(2), start_xy(1) - c(1));
     p_entry = c + r*[cos(th_near), sin(th_near)];
     psi_entry = th_near + sgn*pi/2;                           % 切向航向
-    dpath = dubins.core([start_xy, start_heading], [p_entry, psi_entry], r);
+    L_tan = 2.5*r;                                            % 切向直线段长度（保证末段弧不进入绕圈圆）
+    p_pre = p_entry - L_tan*[cos(psi_entry), sin(psi_entry)];
+    dpath = dubins.core([start_xy, start_heading], [p_pre, psi_entry], r);
     if ~dpath.valid, error('make_orbit_plan:dubins', 'Dubins 切入无解'); end
 
     fly_pt = [start_xy, z, 1, 0];                             % 首行：当前位置（与现有格式一致）
-    fly_pt = dubins.append_segments(fly_pt, [p_entry, psi_entry], dpath, z, r);
+    fly_pt = dubins.append_segments(fly_pt, [p_pre, psi_entry], dpath, z, r);
+    fly_pt = [fly_pt; p_entry(1), p_entry(2), z, 1, 0];       % 切向直线段终点（圆上切点）
 
-    % ---- 2) N 圈圆：每圈 2π-ε；终点行与下一圈起点行坐标重合，过滤时合并 ----
-    th0 = th_near;                                            % 第 1 圈起点方位
-    for k = 1:params.turns
-        th_s = th0 - sgn*(k-1)*eps;                           % 本圈起点方位
-        th_x = th_s + sgn*(2*pi - eps);                       % 本圈终点方位
-        p_s = c + r*[cos(th_s), sin(th_s)];
-        p_x = c + r*[cos(th_x), sin(th_x)];
-        fly_pt = [fly_pt; p_s, z, 2, dir_type; c, z, 2, r; p_x, z, 1, 0];
+    % ---- 2) N 圈圆：正多边形逼近（全部直线段，位置判定切换）----
+    n_seg = 48;                                               % 每圈边数（7.5°/边）
+    dth_seg = 2*pi / n_seg;
+    th0 = th_near;
+    for k = 1:params.turns*n_seg - 1
+        th = th0 + sgn*k*dth_seg;                             % 顶点方位（CW 递减 / CCW 递增）
+        fly_pt = [fly_pt; c(1) + r*cos(th), c(2) + r*sin(th), z, 1, 0];
     end
-    th_last = th0 - sgn*params.turns*eps;                     % 末圈终点方位
+    th_last = th0 + sgn*(params.turns*n_seg - 1)*dth_seg;     % 末顶点方位
     p_last = c + r*[cos(th_last), sin(th_last)];
 
-    % ---- 3) 切出直线 500 m + 终止行 ----
+    % ---- 3) 切出直线 3000 m + 终止行（足够长，让航向在制导冻结前被拉正）----
     psi_exit = th_last + sgn*pi/2;
-    p_out = p_last + 500*[cos(psi_exit), sin(psi_exit)];
+    p_out = p_last + 3000*[cos(psi_exit), sin(psi_exit)];
     fly_pt = [fly_pt; p_out, z, 1, 0; p_out(1), p_out(2), z, -10000, -10000];
 
     % ---- 4) 过滤合并（重合的终点行/起点行 → 单行；清杂点；保留圆心行）----
