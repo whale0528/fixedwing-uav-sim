@@ -12,17 +12,20 @@ function [fly_pt, num_fly_pt, total_len] = make_orbit_plan(params, start_xy, sta
 %   type=2+info>2 圆心行(info=半径)；终止行 [.., -10000, -10000]。
 %
 % 设计决策（经实测教训收敛）：
-% 1) 绕圈用正多边形（48 边/圈，直线段）逼近——模型直线切换（位置判定）鲁棒，
-%    圆弧切换（扫角+mod 卷绕+提前量）长弧串联不可靠；
-% 2) 切入用"切向直线段"：Dubins 先到切线上、圆外 2.5r 处的预切点，避免末段弧"骑圆"；
-% 3) 半径约束：制导调参后 P 通道稳态上限 = kdy×侧偏饱和 = 0.02×40 = 0.8 g，
-%    34 m/s 下最小可跟踪半径 ≈ 147 m，下限取 200 m 留裕量。
+% 1) 全部路径只用 type=1 直线航点：Dubins 弧段一律按 ~7.5° 离散成短直线（同圆的
+%    多边形处理）。模型 fly_phase 的圆弧切换（扫角+mod 卷绕+提前量）不可靠，
+%    实测导致切入段切换错位 → 大侧偏 → BTT 滚转失控；直线切换是位置判定，鲁棒。
+% 2) 切入用"直接到圆上切点"的 Dubins（航向对齐切线）——全部离散为直线后，
+%    圆弧机制的"骑圆"问题不复存在；远圆心场景下切入末段可能沿圆接近切点，
+%    圈数度量会略高（执行不受影响）。
+% 3) 半径约束：制导调参后 P 通道稳态上限 = kdy×侧偏饱和 = 0.02×15 = 0.3 g，
+%    34 m/s 下最小可跟踪半径 ≈ 393 m，下限取 400 m 留裕量。
     Vc = 34; g = 9.8;
     r = params.radius_m; c = params.center;
-    r_min_track = Vc^2 / (0.02*40*g);    % ≈ 147 m
-    if r < max(r_min_track, 200)
+    r_min_track = Vc^2 / (0.02*15*g);    % ≈ 393 m：kdy=0.02 × 侧偏饱和 15 m = 0.3 g 稳态上限
+    if r < max(r_min_track, 400)
         error('make_orbit_plan:radius', ...
-              '半径 %.0f m 小于巡航制导可跟踪下限 %.0f m（稳态过载上限 0.8 g）', r, max(r_min_track, 200));
+              '半径 %.0f m 小于巡航制导可跟踪下限 %.0f m（稳态过载上限 0.3 g）', r, max(r_min_track, 400));
     end
     if params.turns ~= round(params.turns) || params.turns < 1 || params.turns > 50
         error('make_orbit_plan:turns', '圈数 %g 需为 [1,50] 内整数', params.turns);
@@ -47,31 +50,48 @@ function [fly_pt, num_fly_pt, total_len] = make_orbit_plan(params, start_xy, sta
     fly_pt = [start_xy, z, 1, 0];                     % 首行：当前位置（与现有格式一致）
     curr = [start_xy, start_heading];
 
-    % ---- 0) 前置途经位姿（goto 段，Dubins 依次连接）----
+    % ---- 0) 前置途经位姿（goto 段：Dubins 求形 → 离散成直线航点）----
+    % via_poses 元素为 [x, y, psi]；psi 填 NaN 表示"航向自由"——
+    % 在 16 个候选航向上选最短 Dubins，得到近乎直线的逼近（避免指定航向
+    % 导致的大钩子路径，如"向东起飞后要去正北 2 km 处"）。
     for v = 1:numel(via_poses)
         vp = via_poses{v};                            % [x, y, psi]
-        dp = dubins.core(curr, vp, r);
-        if ~dp.valid, error('make_orbit_plan:dubins', '途经位姿 %d 的 Dubins 无解', v); end
-        fly_pt = dubins.append_segments(fly_pt, vp, dp, z, r);
+        if numel(vp) < 3 || isnan(vp(3))
+            best = []; bestL = inf; bestH = 0;
+            for h = 0:22.5:337.5
+                cand = dubins.core(curr, [vp(1), vp(2), deg2rad(h)], r);
+                if cand.valid
+                    L = sum([cand.param.t, cand.param.p, cand.param.q]) * r;
+                    if L < bestL, bestL = L; best = cand; bestH = h; end
+                end
+            end
+            if isempty(best)
+                error('make_orbit_plan:dubins', '途经点 %d 无可行 Dubins 路径', v);
+            end
+            dp = best;
+        else
+            dp = dubins.core(curr, vp, r);
+            if ~dp.valid, error('make_orbit_plan:dubins', '途经位姿 %d 的 Dubins 无解', v); end
+            bestH = rad2deg(vp(3));
+        end
+        fly_pt = append_polyline(fly_pt, dp, z, r);
         total_len = total_len + sum([dp.param.t, dp.param.p, dp.param.q]) * r;
-        curr = vp;
+        curr = [vp(1), vp(2), deg2rad(bestH)];        % 下一段从这里接着飞
     end
 
-    % ---- 1) 切入：Dubins 到切线上、圆外 2.5r 处的预切点，再沿切向直线切入 ----
-    % 关键：若 Dubins 直接切到圆上切点，其末段圆弧可能与绕圈圆共圆心（"骑圆"），
-    % 整圈弧会被 mod 卷绕瞬间跳过；切向直线段的切换是位置判定，可靠。
+    % ---- 1) 切入：Dubins 直接到圆上切点（航向对齐切线），离散成直线 ----
+    % 航点已全部直线化（无圆弧机制），不再有"骑圆"问题，无需 p_pre 退避；
+    % 代价：当切入路径末段恰好沿绕圈圆接近切点时，判定带内的圈数会计入这部分
+    % 扫角（远圆心任务常见），属度量问题而非执行问题。
     th_near = atan2(curr(2) - c(2), curr(1) - c(1));
     p_entry = c + r*[cos(th_near), sin(th_near)];
     psi_entry = th_near + sgn*pi/2;                   % 切向航向
-    L_tan = 2.5*r;                                    % 切向直线段长度（保证末段弧不进入绕圈圆）
-    p_pre = p_entry - L_tan*[cos(psi_entry), sin(psi_entry)];
-    dpath = dubins.core(curr, [p_pre, psi_entry], r);
+    dpath = dubins.core(curr, [p_entry, psi_entry], r);
     if ~dpath.valid, error('make_orbit_plan:dubins', 'Dubins 切入无解'); end
-    fly_pt = dubins.append_segments(fly_pt, [p_pre, psi_entry], dpath, z, r);
-    total_len = total_len + sum([dpath.param.t, dpath.param.p, dpath.param.q]) * r + L_tan;
-    fly_pt = [fly_pt; p_entry(1), p_entry(2), z, 1, 0];   % 切向直线段终点（圆上切点）
+    fly_pt = append_polyline(fly_pt, dpath, z, r);
+    total_len = total_len + sum([dpath.param.t, dpath.param.p, dpath.param.q]) * r;
 
-    % ---- 2) N 圈圆：正多边形逼近（全部直线段，位置判定切换）----
+    % ---- 2) N 圈圆：正多边形逼近（直线段，位置判定切换）----
     n_seg = 48;                                       % 每圈边数（7.5°/边）
     dth_seg = 2*pi / n_seg;
     chord_len = 2*r*sin(dth_seg/2);
@@ -94,7 +114,31 @@ function [fly_pt, num_fly_pt, total_len] = make_orbit_plan(params, start_xy, sta
         fly_pt = [fly_pt; p_last(1), p_last(2), z, -10000, -10000];
     end
 
-    % ---- 4) 过滤合并（重合的终点行/起点行 → 单行；清杂点；保留圆心行）----
+    % ---- 4) 过滤（清重合点与 <40 m 杂点；本方案无圆弧行，保留逻辑以防万一）----
     fly_pt = dubins.filter_waypoints(fly_pt);
     num_fly_pt = size(fly_pt, 1);
+end
+
+function fly_pt = append_polyline(fly_pt, path, pz_val, r)
+% APPEND_POLYLINE 把一条 Dubins 路径离散成短直线航点（全部 type=1）
+% 弧段按 ~7.5° 采样，直线段只取终点；模型只做位置判定的直线切换，规避圆弧切换的脆弱性。
+    plens = [path.param.t, path.param.p, path.param.q];
+    types = path.param.type;
+    curr = path.q0;
+    for j = 1:3
+        if plens(j) * r < 1
+            curr = dubins.interp_seg(curr, plens(j), types(j), r);
+            continue;
+        end
+        if types(j) == 'S'
+            n = 1;
+        else
+            n = max(1, round(plens(j) / (7.5*pi/180)));   % 每 7.5° 一个点
+        end
+        for k = 1:n
+            q = dubins.interp_seg(curr, plens(j)*k/n, types(j), r);
+            fly_pt = [fly_pt; q(1), q(2), pz_val, 1, 0];   %#ok<AGROW>
+        end
+        curr = dubins.interp_seg(curr, plens(j), types(j), r);
+    end
 end

@@ -11,7 +11,7 @@ function report = run_orbit_sim(params, start_xy, start_heading, stop_time)
     [fly_pt, num_fly_pt, total_len] = make_orbit_plan(params, start_xy, start_heading);
     if stop_time <= 0
         Vc = 34;
-        stop_time = ceil(60 + 1.08*total_len/Vc);
+        stop_time = ceil(60 + 1.04*total_len/Vc);   % 起飞段 60 s + 路径时间×1.04（留 ~15 s 尾巴）
     end
     save('fly_planfjy.mat', 'fly_pt', 'num_fly_pt');   % 持久化，与现有工作流兼容
     assignin('base', 'fly_pt', fly_pt);                % 模型 Constant 块读 base 工作区

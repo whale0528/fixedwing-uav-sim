@@ -56,8 +56,8 @@ __MWOPC_PART_BEGIN__ /metadata/coreProperties.xml
   <dcterms:created xsi:type="dcterms:W3CDTF">2026-03-16T10:09:56Z</dcterms:created>
   <dc:creator>fjy</dc:creator>
   <cp:lastModifiedBy>fjy</cp:lastModifiedBy>
-  <dcterms:modified xsi:type="dcterms:W3CDTF">2026-09-14T02:52:49Z</dcterms:modified>
-  <cp:revision>1.144</cp:revision>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">2026-09-14T03:02:11Z</dcterms:modified>
+  <cp:revision>1.145</cp:revision>
   <cp:version>R2025b</cp:version>
 </cp:coreProperties>
 
@@ -213,7 +213,7 @@ __MWOPC_PART_BEGIN__ /simulink/blockdiagram.xml
     <ConfigManagerSettings>
       <P Name="ModifiedByFormat">%&lt;Auto&gt;</P>
       <P Name="ModifiedDateFormat">%&lt;Auto&gt;</P>
-      <P Name="ModelVersionFormat">%&lt;AutoIncrement:1.144&gt;</P>
+      <P Name="ModelVersionFormat">%&lt;AutoIncrement:1.145&gt;</P>
     </ConfigManagerSettings>
     <EditorSettings>
       <P Name="ShowMarkup">off</P>
@@ -10324,14 +10324,14 @@ __MWOPC_PART_BEGIN__ /simulink/systems/system_1892.xml
   <Block BlockType="Saturate" Name="Saturation2" SID="1502">
     <P Name="Position">[190, 25, 220, 55]</P>
     <P Name="ZOrder">1823</P>
-    <P Name="UpperLimit">40</P>
-    <P Name="LowerLimit">-40</P>
+    <P Name="UpperLimit">15</P>
+    <P Name="LowerLimit">-15</P>
   </Block>
   <Block BlockType="Saturate" Name="Saturation3" SID="1506">
     <P Name="Position">[190, 125, 220, 155]</P>
     <P Name="ZOrder">1827</P>
-    <P Name="UpperLimit">6</P>
-    <P Name="LowerLimit">-6</P>
+    <P Name="UpperLimit">3</P>
+    <P Name="LowerLimit">-3</P>
   </Block>
   <Block BlockType="Scope" Name="Scope2" SID="1513">
     <PortCounts in="2"/>
@@ -10403,7 +10403,7 @@ __MWOPC_PART_BEGIN__ /simulink/systems/system_1892.xml
   <Block BlockType="Gain" Name="kdy_dot" SID="1507">
     <P Name="Position">[265, 119, 330, 161]</P>
     <P Name="ZOrder">1828</P>
-    <P Name="Gain">0.2</P>
+    <P Name="Gain">0.05</P>
   </Block>
   <Block BlockType="Outport" Name="Nyc" SID="1895">
     <P Name="Position">[845, 38, 875, 52]</P>
