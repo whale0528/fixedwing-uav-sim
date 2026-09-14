@@ -16,3 +16,7 @@ llm_key.txt
 feasible_pts.mat
 fly_planfjy.mat
 raw_obs.mat
+
+# 每次 init 由 airdate.m 重建 / 本地截图
+aerodata.mat
+_view_fig.png
