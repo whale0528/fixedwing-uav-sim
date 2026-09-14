@@ -50,6 +50,31 @@ function [fly_pt, num_fly_pt, total_len] = make_orbit_plan(params, start_xy, sta
     fly_pt = [start_xy, z, 1, 0];                     % 首行：当前位置（与现有格式一致）
     curr = [start_xy, start_heading];
 
+    % ---- 0a) 转向+直飞段（可选 params.goto：heading_deg、dist_m）----
+    % "先转到指定航向，再严格直线飞 dist_m"——比 Dubins 位姿匹配更贴合
+    % "向正北飞 2000 m"这类指令（Dubins 会把转向分摊成两段弧，路径呈弓形）。
+    if isfield(params, 'goto') && ~isempty(params.goto) && params.goto.dist_m > 0
+        hd = deg2rad(params.goto.heading_deg);
+        dpsi = mod(hd - curr(3) + pi, 2*pi) - pi;         % 最短转向角（带符号）
+        if abs(dpsi) > 1e-9
+            seg_type = 'L';
+            if dpsi < 0, seg_type = 'R'; end
+            n = max(1, round(abs(dpsi)/(7.5*pi/180)));    % 转向弧按 7.5° 离散
+            q = curr;
+            for k = 1:n
+                q = dubins.interp_seg(curr, abs(dpsi)*k/n, seg_type, r);
+                fly_pt = [fly_pt; q(1), q(2), z, 1, 0];   %#ok<AGROW>
+            end
+            curr = [q(1), q(2), hd];
+            total_len = total_len + r*abs(dpsi);
+        end
+        p_end = [curr(1) + params.goto.dist_m*cos(hd), ...
+                 curr(2) + params.goto.dist_m*sin(hd)];
+        fly_pt = [fly_pt; p_end(1), p_end(2), z, 1, 0];   %#ok<AGROW>
+        total_len = total_len + params.goto.dist_m;
+        curr = [p_end(1), p_end(2), hd];
+    end
+
     % ---- 0) 前置途经位姿（goto 段：Dubins 求形 → 离散成直线航点）----
     % via_poses 元素为 [x, y, psi]；psi 填 NaN 表示"航向自由"——
     % 在 16 个候选航向上选最短 Dubins，得到近乎直线的逼近（避免指定航向

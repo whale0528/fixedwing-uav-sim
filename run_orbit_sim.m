@@ -10,8 +10,9 @@ function report = run_orbit_sim(params, start_xy, start_heading, stop_time)
     end
     [fly_pt, num_fly_pt, total_len] = make_orbit_plan(params, start_xy, start_heading);
     if stop_time <= 0
-        Vc = 34;
-        stop_time = ceil(60 + 1.04*total_len/Vc);   % 起飞段 60 s + 路径时间×1.04（留 ~15 s 尾巴）
+        % 实测含起飞段的全程平均速度 ≈32 m/s（转弯段略慢），+4 s 裕量：
+        % 转完圈约 5~8 s 后结束仿真。
+        stop_time = ceil(total_len/32) + 4;
     end
     save('fly_planfjy.mat', 'fly_pt', 'num_fly_pt');   % 持久化，与现有工作流兼容
     assignin('base', 'fly_pt', fly_pt);                % 模型 Constant 块读 base 工作区
