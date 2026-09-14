@@ -45,13 +45,13 @@ for dir = ["CW", "CCW"]
               max(abs(dd - expected)) < 1e-9);
 end
 
-% ---- 4. 半径低于制导可跟踪下限（1600 m）必须报错 ----
-p_bad = make_p(); p_bad.radius_m = 1500;
+% ---- 4. 半径低于制导可跟踪下限（调参后为 200 m）必须报错 ----
+p_bad = make_p(); p_bad.radius_m = 150;
 try
     make_orbit_plan(p_bad, [0 0], 0);
-    R = check(R, '4. 半径 1500 m 应报错', false);
+    R = check(R, '4. 半径 150 m 应报错', false);
 catch ME
-    R = check(R, '4. 半径 1500 m 应报错', strcmp(ME.identifier, 'make_orbit_plan:radius'));
+    R = check(R, '4. 半径 150 m 应报错', strcmp(ME.identifier, 'make_orbit_plan:radius'));
 end
 
 % ---- 5. 切入段不得进入绕圈圆内部（防"骑圆"回归）----
