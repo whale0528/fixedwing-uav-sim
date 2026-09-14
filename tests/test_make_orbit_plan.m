@@ -1,73 +1,96 @@
-function tests = test_make_orbit_plan
-    tests = functiontests(localfunctions);
+% TEST_MAKE_ORBIT_PLAN 绕圈航点生成检查（脚本版，F5 直接运行）
+% 与原来的框架版测试（matlab.unittest）检查同一组性质，共 5 组。
+% 用法：在编辑器打开本文件按 F5；或命令窗口 run('F:\练习\tests\test_make_orbit_plan.m')。
+% 注意：本脚本会自动 cd 到项目根目录并刷新函数缓存，可在任意目录启动。
+
+cd(fileparts(mfilename('fullpath')));   % 本脚本在 tests\ 下
+cd('..');                               % 回到项目根 F:\练习
+addpath(pwd);
+clear functions;
+rehash path;
+
+R = {};   % 结果记录：'P' 通过 / 'F' 失败
+fprintf('=== make_orbit_plan 检查（脚本版） ===\n');
+
+% ---- 1. 行结构 ----
+p = make_p();
+[fly_pt, num_fly_pt] = make_orbit_plan(p, [0 0], deg2rad(77.8));
+R = check(R, '1a. 每行 5 列',        size(fly_pt, 2) == 5);
+R = check(R, '1b. num_fly_pt 与行数一致', num_fly_pt == size(fly_pt, 1));
+R = check(R, '1c. 末行为终止行 [-10000 -10000]', ...
+          isequal(fly_pt(end, 4:5), [-10000 -10000]));
+R = check(R, '1d. 首行 = 起点 (0,0)', isequal(fly_pt(1, 1:2), [0 0]));
+
+% ---- 2. 多边形顶点数与半径 ----
+c = p.center; r = p.radius_m;
+on_circle = fly_pt(:,4) == 1 & abs(hypot(fly_pt(:,1)-c(1), fly_pt(:,2)-c(2)) - r) < 0.5;
+R = check(R, sprintf('2a. 圆上顶点数 = %d×48（3 圈应 144）', p.turns), sum(on_circle) == p.turns*48);
+others = find(~on_circle & fly_pt(:,4) ~= -10000);
+dmin_out = inf;
+for k = 1:numel(others)
+    dmin_out = min(dmin_out, abs(hypot(fly_pt(others(k),1)-c(1), fly_pt(others(k),2)-c(2)) - r));
+end
+R = check(R, '2b. 其余航点不在圆上（切入/切出段）', dmin_out > 0.5);
+
+% ---- 3. 顶点方位步进（CW 递减 / CCW 递增，每步 7.5°）----
+n_seg = 48; dth_seg = 2*pi/n_seg;
+for dir = ["CW", "CCW"]
+    pd = make_p(); pd.direction = dir;
+    [fpd, ~] = make_orbit_plan(pd, [0 0], deg2rad(77.8));
+    rows = fpd(fpd(:,4)==1 & abs(hypot(fpd(:,1)-c(1), fpd(:,2)-c(2)) - r) < 0.5, :);
+    th = atan2(rows(:,2)-c(2), rows(:,1)-c(1));
+    dd = mod(diff(th) + pi, 2*pi) - pi;                      % 卷绕安全的相邻方位差
+    expected = strcmp(dir,"CW")*(-dth_seg) + strcmp(dir,"CCW")*dth_seg;
+    R = check(R, sprintf('3. 顶点方位步进正确（%s, 7.5°/边）', dir), ...
+              max(abs(dd - expected)) < 1e-9);
 end
 
-function params = make_p
-    params = struct('center', [8000 2000], 'radius_m', 2000, ...
-                    'direction', 'CW', 'turns', 3);
+% ---- 4. 半径低于制导可跟踪下限（1600 m）必须报错 ----
+p_bad = make_p(); p_bad.radius_m = 1500;
+try
+    make_orbit_plan(p_bad, [0 0], 0);
+    R = check(R, '4. 半径 1500 m 应报错', false);
+catch ME
+    R = check(R, '4. 半径 1500 m 应报错', strcmp(ME.identifier, 'make_orbit_plan:radius'));
 end
 
-function testRowStructure(testCase)
-    [fly_pt, num_fly_pt] = make_orbit_plan(make_p(), [0 0], deg2rad(77.8));
-    testCase.verifyEqual(size(fly_pt, 2), 5);
-    testCase.verifyEqual(num_fly_pt, size(fly_pt, 1));
-    testCase.verifyEqual(fly_pt(end, 4:5), [-10000 -10000]);   % 终止行
-    testCase.verifyEqual(fly_pt(1, 1:2), [0 0]);                % 首行=起点位置
-end
-
-function testPolygonVertexCountAndRadius(testCase)
-    % 绕圈用正多边形逼近：圆上 type=1 顶点数 = 切入切点 + (N*48 - 1) = N*48
-    [fly_pt, ~] = make_orbit_plan(make_p(), [0 0], deg2rad(77.8));
-    c = [8000 2000]; r = 2000; n_seg = 48;
-    on_circle = fly_pt(:,4) == 1 & abs(hypot(fly_pt(:,1)-c(1), fly_pt(:,2)-c(2)) - r) < 0.5;
-    testCase.verifyEqual(sum(on_circle), 3*n_seg);
-    % 其余行不得落在圆上（切入段在圆外）
-    others = find(~on_circle & fly_pt(:,4) ~= -10000);
-    for k = 1:numel(others)
-        d = hypot(fly_pt(others(k),1)-c(1), fly_pt(others(k),2)-c(2));
-        testCase.verifyGreaterThan(abs(d - r), 0.5);
+% ---- 5. 切入段不得进入绕圈圆内部（防"骑圆"回归）----
+start = [0 0 deg2rad(77.8)];
+th_near = atan2(start(2)-c(2), start(1)-c(1));
+psi_entry = th_near - pi/2;   % CW 切向
+p_pre = c + r*[cos(th_near), sin(th_near)] - 2.5*r*[cos(psi_entry), sin(psi_entry)];
+dp = dubins.core(start, [p_pre, psi_entry], r);
+plens = [dp.param.t, dp.param.p, dp.param.q];
+curr = start; dmin_entry = inf;
+for j = 1:3
+    for s = linspace(0, plens(j), 300)
+        q = dubins.interp_seg(curr, s, dp.param.type(j), r);
+        dmin_entry = min(dmin_entry, hypot(q(1)-c(1), q(2)-c(2)));
     end
+    curr = dubins.interp_seg(curr, plens(j), dp.param.type(j), r);
+end
+R = check(R, sprintf('5. 切入段不进入绕圈圆（最近距 %.0f m > r）', dmin_entry), dmin_entry > r);
+
+% ---- 汇总 ----
+fprintf('\n=== 结果：%d 通过 / %d 失败 ===\n', sum(strcmp(R,'P')), sum(strcmp(R,'F')));
+if all(strcmp(R, 'P'))
+    fprintf('全部通过 ✓\n');
+else
+    fprintf('存在失败项，检查上面 [FAIL] 行\n');
 end
 
-function testPolygonBearingSteps(testCase)
-    % 顶点方位角步进 = ±7.5°/边，方向与 CW/CCW 一致
-    n_seg = 48; dth_seg = 2*pi/n_seg;
-    for dir = ["CW", "CCW"]
-        p = make_p(); p.direction = dir;
-        [fly_pt, ~] = make_orbit_plan(p, [0 0], deg2rad(77.8));
-        c = p.center;
-        rows = fly_pt(fly_pt(:,4)==1 & abs(hypot(fly_pt(:,1)-c(1), fly_pt(:,2)-c(2)) - 2000) < 0.5, :);
-        th = atan2(rows(:,2)-c(2), rows(:,1)-c(1));
-        d = mod(diff(th) + pi, 2*pi) - pi;    % 卷绕安全的相邻差
-        expected = strcmp(dir, "CW") * (-dth_seg) + strcmp(dir, "CCW") * dth_seg;
-        testCase.verifyLessThan(max(abs(d - expected)), 1e-9);
+% ================= 局部函数（脚本末尾） =================
+function p = make_p
+    p = struct('center', [8000 2000], 'radius_m', 2000, ...
+               'direction', 'CW', 'turns', 3);
+end
+
+function R = check(R, name, cond)
+    if cond
+        R{end+1} = 'P';                     %#ok<AGROW>
+        fprintf('  [PASS] %s\n', name);
+    else
+        R{end+1} = 'F';                     %#ok<AGROW>
+        fprintf('  [FAIL] %s\n', name);
     end
-end
-
-function testRadiusTooSmallErrors(testCase)
-    p = make_p(); p.radius_m = 1500;   % 低于制导可跟踪下限 1600 m
-    testCase.verifyError(@() make_orbit_plan(p, [0 0], 0), 'make_orbit_plan:radius');
-end
-
-function testEntryPathClearsOrbitCircle(testCase)
-    % 防回归：切入段不得进入绕圈圆内部。
-    % 若切入 Dubins 末段弧与绕圈圆共圆心（"骑圆"），飞机到达绕圈起点时
-    % 方位角在 mod 卷绕意义上已越过终点，圆弧会被瞬间跳过（实测教训）。
-    p = make_p();
-    start = [0 0 deg2rad(77.8)];
-    c = p.center; r = p.radius_m;
-    th_near = atan2(start(2)-c(2), start(1)-c(1));
-    psi_entry = th_near - pi/2;    % CW 切向（make_p 为 CW）
-    p_pre = c + r*[cos(th_near), sin(th_near)] - 2.5*r*[cos(psi_entry), sin(psi_entry)];
-    dp = dubins.core(start, [p_pre, psi_entry], r);
-    plens = [dp.param.t, dp.param.p, dp.param.q];
-    curr = start; dmin = inf;
-    for j = 1:3
-        for s = linspace(0, plens(j), 300)
-            q = dubins.interp_seg(curr, s, dp.param.type(j), r);
-            dmin = min(dmin, hypot(q(1)-c(1), q(2)-c(2)));
-        end
-        curr = dubins.interp_seg(curr, plens(j), dp.param.type(j), r);
-    end
-    testCase.verifyGreaterThan(dmin, r);
 end
