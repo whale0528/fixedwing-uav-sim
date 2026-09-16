@@ -25,10 +25,16 @@ function [fly_pt, num_fly_pt, total_len] = make_orbit_plan(params, start_xy, sta
         segs{end+1} = {'line',    params.goto.dist_m};
     end
 
-    % via_poses：绕圈前依次经过的位姿
+    % via_poses：绕圈前依次经过的位姿（旧接口，psi 单位为**弧度**；NaN = 航向自由）
     if isfield(params, 'via_poses') && ~isempty(params.via_poses)
         for v = 1:numel(params.via_poses)
-            segs{end+1} = {'goto', params.via_poses{v}};   %#ok<AGROW>
+            vp = params.via_poses{v};
+            if numel(vp) < 3
+                vp(3) = NaN;
+            else
+                vp(3) = rad2deg(vp(3));        % 弧度 → 度（make_route_plan 的 goto 用度）
+            end
+            segs{end+1} = {'goto', vp};        %#ok<AGROW>
         end
     end
 

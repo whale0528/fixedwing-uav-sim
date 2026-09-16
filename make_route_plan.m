@@ -114,7 +114,8 @@ function [fly_pt, curr, L] = add_turn(fly_pt, curr, hd, rho, z)
 end
 
 function [fly_pt, curr, L] = add_goto(fly_pt, curr, vp, rho, z)
-% 位姿连接：vp = [x, y, psi]；psi 为 NaN 表示航向自由（16 个候选取最短）
+% 位姿连接：vp = [x, y, heading_deg]；heading 为**度**（0=北、90=东），
+% 填 NaN 表示航向自由（16 个候选取最短 Dubins）
     vp = vp(:)';
     if numel(vp) < 3 || isnan(vp(3))
         best = []; bestL = inf; bestH = 0;
@@ -130,11 +131,11 @@ function [fly_pt, curr, L] = add_goto(fly_pt, curr, vp, rho, z)
         end
         dp = best;
     else
-        dp = dubins.core(curr, vp, rho);
+        bestH = vp(3);                                    % 度
+        dp = dubins.core(curr, [vp(1), vp(2), deg2rad(bestH)], rho);
         if ~dp.valid
             error('make_route_plan:dubins', 'goto 目标 (%.0f, %.0f) 的 Dubins 无解', vp(1), vp(2));
         end
-        bestH = rad2deg(vp(3));
     end
     fly_pt = append_polyline(fly_pt, dp, z, rho);
     L = sum([dp.param.t, dp.param.p, dp.param.q]) * rho;
