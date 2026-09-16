@@ -56,8 +56,8 @@ __MWOPC_PART_BEGIN__ /metadata/coreProperties.xml
   <dcterms:created xsi:type="dcterms:W3CDTF">2026-03-16T10:09:56Z</dcterms:created>
   <dc:creator>fjy</dc:creator>
   <cp:lastModifiedBy>fjy</cp:lastModifiedBy>
-  <dcterms:modified xsi:type="dcterms:W3CDTF">2026-09-14T03:02:11Z</dcterms:modified>
-  <cp:revision>1.145</cp:revision>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">2026-09-14T03:40:43Z</dcterms:modified>
+  <cp:revision>1.146</cp:revision>
   <cp:version>R2025b</cp:version>
 </cp:coreProperties>
 
@@ -213,7 +213,7 @@ __MWOPC_PART_BEGIN__ /simulink/blockdiagram.xml
     <ConfigManagerSettings>
       <P Name="ModifiedByFormat">%&lt;Auto&gt;</P>
       <P Name="ModifiedDateFormat">%&lt;Auto&gt;</P>
-      <P Name="ModelVersionFormat">%&lt;AutoIncrement:1.145&gt;</P>
+      <P Name="ModelVersionFormat">%&lt;AutoIncrement:1.146&gt;</P>
     </ConfigManagerSettings>
     <EditorSettings>
       <P Name="ShowMarkup">off</P>
@@ -1813,7 +1813,7 @@ __MWOPC_PART_BEGIN__ /simulink/configSet0.xml
     <Array PropName="Components" Type="Simulink.ConfigComponent" Dimension="11*1">
       <Object ObjectID="2" ClassName="Simulink.SolverCC">
         <P Name="StartTime" Class="char">0.0</P>
-        <P Name="StopTime" Class="char">533</P>
+        <P Name="StopTime" Class="char">371</P>
         <P Name="AbsTol" Class="char">auto</P>
         <P Name="AutoScaleAbsTol" Class="char">on</P>
         <P Name="FixedStep" Class="char">0.001</P>
