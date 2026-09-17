@@ -87,6 +87,24 @@ else
         R = check(R, '10. 混合表达（调用失败）', false);
         fprintf('      错误: %s\n', ME.message);
     end
+
+    % 11. 地标表含"起飞点"（返航目标）
+    T = readtable('landmarks.xlsx');
+    R = check(R, '11. 地标表含"起飞点"', any(strcmpi(string(T.name), "起飞点")));
+
+    % 12. 返航：说法里"返回起飞点"应抽成 goto 起飞点
+    try
+        lm_names = string(T.name)';
+        raw = llm2route('向北飞2000米后绕训练空域中心转3圈再返回起飞点', 'Landmarks', lm_names);
+        [plan, ~, ok] = check_route_spec(raw, T);
+        fprintf('  抽取结果: %s\n', strtrim(jsonencode(raw)));
+        last = plan.segments{end};
+        R = check(R, '12. "返回起飞点"抽成 goto(0,0)', ok && strcmp(last{1}, 'goto') && ...
+                  isequal(last{2}(1:2), [0 0]));
+    catch ME
+        R = check(R, '12. 返回起飞点（调用失败）', false);
+        fprintf('      错误: %s\n', ME.message);
+    end
 end
 
 % ---- 汇总 ----

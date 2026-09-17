@@ -7,7 +7,8 @@ function report = run_llm_mission(instruction, opt)
 %   plot_traj_topview
 %
 % 可选参数：
-%   LandmarksFile 地标表文件（默认 landmarks.xlsx）
+%   LandmarksFile 地标表文件（默认 landmarks.xlsx；**同时作为 LLM 的可用地标白名单**，
+%                 往表里加地标即可让 LLM 认识新地点）
 %   StartPose     起点 [x y psi]；缺省从 base 工作区取 x_0,y_0,psi_0
 %   RunSim        false 时只做抽取+校验+生成航点，不跑仿真（快速看计划）
 %   Raw           直接给 LLM 风格的 JSON（测试钩子，跳过在线调用）
@@ -27,11 +28,13 @@ function report = run_llm_mission(instruction, opt)
     report = struct('ok', false, 'issues', {{}}, 'raw', [], 'plan', [], ...
                     'fly_pt', [], 'total_len', 0, 'out', [], 'verdict', []);
 
-    % ---- 1) 地标表 ----
+    % ---- 1) 地标表（同时作为 LLM 的可用地标白名单）----
     if ~isfile(opt.LandmarksFile)
         error('run_llm_mission:noLandmarks', '找不到地标表 %s', opt.LandmarksFile);
     end
     landmarks = readtable(opt.LandmarksFile);
+    lm_names = string(landmarks.name)';
+    fprintf('地标白名单（%d 个）: %s\n', numel(lm_names), strjoin(lm_names, '、'));
 
     % ---- 2) 起点 ----
     sp = opt.StartPose;
@@ -41,7 +44,7 @@ function report = run_llm_mission(instruction, opt)
 
     % ---- 3) 抽取（LLM 或测试钩子）----
     if isempty(opt.Raw)
-        raw = llm2route(instruction);
+        raw = llm2route(instruction, 'Landmarks', lm_names);   % 白名单来自地标表
     else
         raw = opt.Raw;
     end
