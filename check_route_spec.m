@@ -103,8 +103,13 @@ function [plan, issues, ok] = check_route_spec(raw, landmarks)
                 append_iss(iss);
                 turns = round(turns);
                 dir = 'CW';
-                if isfield(s, 'direction') && any(strcmpi(string(s.direction), ["CW", "CCW"]))
-                    dir = upper(string(s.direction));
+                if isfield(s, 'direction') && ~isempty(s.direction)
+                    d = upper(strtrim(string(s.direction)));
+                    if ~isempty(d) && ~any(ismissing(d)) && any(strcmpi(d, ["CW", "CCW"]))
+                        dir = d;
+                    else
+                        issues{end+1} = 'direction 缺失/非法，默认 CW';
+                    end
                 else
                     issues{end+1} = 'direction 缺失/非法，默认 CW';
                 end

@@ -27,6 +27,19 @@ function [ok, rep] = feasible_orbit(r, v, N, opt)
     end
     if isempty(opt.lim), lim = vehicle_limits(); else, lim = opt.lim; end
 
+    % ---- 输入有效性（NaN/非正 → 直接判不可行，避免 NaN 比较被当作"通过"）----
+    if ~isfinite(r) || ~isfinite(v) || ~isfinite(N) || r <= 0 || v <= 0 || N < 1
+        items = struct('id', {'C0'}, 'name', {'参数有效性'}, ...
+                       'value', {sprintf('r=%g, v=%g, N=%g', r, v, N)}, ...
+                       'limit', {'有限正数'}, 'violated', {true}, 'margin', {-Inf}, ...
+                       'suggestion', {'请补全半径、速度与圈数后再判定'});
+        ok = false;
+        rep = struct('ok', false, 'items', items, 'violated_ids', {{'C0'}}, ...
+                     'phi_deg', NaN, 'n', NaN, 'flight_time_s', NaN, ...
+                     'feasible_region', '', 'lim', lim, 'summary', '不可行：参数缺失或非法（C0）');
+        return;
+    end
+
     phi = atan(v^2 / (lim.g * r));            % 维持该圆所需坡度
     n   = 1 / cos(phi);                       % 对应过载
     items = struct('id', {}, 'name', {}, 'value', {}, 'limit', {}, ...
