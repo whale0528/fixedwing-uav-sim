@@ -20,3 +20,6 @@ raw_obs.mat
 # 每次 init 由 airdate.m 重建 / 本地截图
 aerodata.mat
 _view_fig.png
+
+# 资料目录下的 PDF（版权与体积，不入库）
+资料/*.pdf
