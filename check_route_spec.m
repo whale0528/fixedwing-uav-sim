@@ -43,7 +43,7 @@ function [plan, issues, ok] = check_route_spec(raw, landmarks)
         if ~isstruct(s) || ~isfield(s, 'type')
             issues{end+1} = sprintf('第 %d 段缺少 type 字段', k); return;
         end
-        t = lower(strtrim(char(string(s.type))));
+        t = lower(strtrim(safestr(s.type)));
 
         switch t
             case 'turn_to'
@@ -69,7 +69,7 @@ function [plan, issues, ok] = check_route_spec(raw, landmarks)
                 end
                 [xy, found] = lookup_landmark(landmarks, s.target_ref);
                 if ~found
-                    issues{end+1} = sprintf('未知地标: %s', string(s.target_ref)); return;
+                    issues{end+1} = sprintf('未知地标: %s', safestr(s.target_ref)); return;
                 end
                 if strcmp(t, 'line_to')
                     segs_out{end+1} = {'line_to', xy};                     %#ok<AGROW>
@@ -82,7 +82,8 @@ function [plan, issues, ok] = check_route_spec(raw, landmarks)
                     segs_out{end+1} = {'goto', [xy, hd]};                  %#ok<AGROW>
                 end
                 if ~isempty(last_xy), total_est = total_est + norm(xy - last_xy); end
-                [~, iss] = check_bounds(xy); append_iss(iss);
+                [bad, iss] = check_bounds(xy); append_iss(iss);
+                if ~isempty(bad), issues{end+1} = bad; return; end
                 last_xy = xy;
 
             case 'orbit'
@@ -95,7 +96,7 @@ function [plan, issues, ok] = check_route_spec(raw, landmarks)
                 end
                 [xy, found] = lookup_landmark(landmarks, s.center_ref);
                 if ~found
-                    issues{end+1} = sprintf('未知地标: %s', string(s.center_ref)); return;
+                    issues{end+1} = sprintf('未知地标: %s', safestr(s.center_ref)); return;
                 end
                 [r, iss] = get_num(s, 'radius_m', '半径', 500, 400, 5000);
                 append_iss(iss);
@@ -132,7 +133,15 @@ function [plan, issues, ok] = check_route_spec(raw, landmarks)
     plan.segments = segs_out;
     plan.total_est = total_est;
     if isfield(raw, 'assumptions') && ~isempty(raw.assumptions)
-        plan.assumptions = cellstr(string(raw.assumptions(:)'));
+        a = raw.assumptions;
+        if ischar(a)
+            plan.assumptions = {a};
+        elseif isstring(a)
+            plan.assumptions = cellstr(a);
+        elseif iscell(a)
+            plan.assumptions = cellfun(@safestr, a, 'UniformOutput', false);
+        end
+        plan.assumptions = plan.assumptions(:)';      % 统一成行向量，便于与 issues 拼接
     end
     plan.ok = true;
     ok = true;
@@ -146,6 +155,25 @@ function [plan, issues, ok] = check_route_spec(raw, landmarks)
 end
 
 % ================= 辅助函数 =================
+function str = safestr(x)
+% 安全转字符串：MATLAB 的 string(NaN) 会得到 <missing>，直接 sprintf 会报错
+    if ischar(x)
+        str = x;
+    elseif isstring(x)
+        if isscalar(x) && ~ismissing(x)
+            str = char(x);
+        else
+            str = strjoin(cellstr(x), ',');
+        end
+    elseif iscell(x) && ~isempty(x)
+        str = safestr(x{1});
+    elseif isnumeric(x) && isscalar(x) && isfinite(x)
+        str = num2str(x);
+    else
+        str = ['<' class(x) '>'];
+    end
+end
+
 function c = to_cell(segs)
 % 统一成 cell（jsondecode 对同构对象数组给 struct 数组，异构给 cell）
     if isstruct(segs)
@@ -183,7 +211,7 @@ end
 function [xy, found] = lookup_landmark(landmarks, ref)
 % 地标查表：支持 table 或 struct（含 name、xn、xe）
     names = string(landmarks.name);
-    idx = find(strcmpi(names, string(ref)), 1);
+    idx = find(strcmpi(names, string(safestr(ref))), 1);
     found = ~isempty(idx);
     if found
         xy = [double(landmarks.xn(idx)), double(landmarks.xe(idx))];
