@@ -12,15 +12,18 @@ addpath(pwd);
 clear functions;
 rehash path;
 
-fprintf('===== 1/4：绕圈航点生成检查（脚本版） =====\n');
+fprintf('===== 1/5：绕圈航点生成检查（脚本版） =====\n');
 run('tests/test_make_orbit_plan.m');
 
-fprintf('\n===== 2/4：LLM 路线校验层检查（脚本版） =====\n');
+fprintf('\n===== 2/5：LLM 路线校验层检查（脚本版） =====\n');
 run('tests/test_check_route_spec.m');
 
-fprintf('\n===== 3/4：LLM 抽取层检查（离线+在线，无 key 时自动跳过在线部分） =====\n');
+fprintf('\n===== 3/5：LLM 抽取层检查（离线+在线，无 key 时自动跳过在线部分） =====\n');
 run('tests/test_llm2route.m');
 
-fprintf('\n===== 4/4：仿真判定检查（框架版） =====\n');
+fprintf('\n===== 4/5：人工确认环检查（LLM 回译 + 确认返回值） =====\n');
+run('tests/test_confirm_route.m');
+
+fprintf('\n===== 5/5：仿真判定检查（框架版） =====\n');
 res = runtests('tests/test_check_orbit_flight.m');
 disp(res);
