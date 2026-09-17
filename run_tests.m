@@ -12,9 +12,12 @@ addpath(pwd);
 clear functions;
 rehash path;
 
-fprintf('===== 1/2：绕圈航点生成检查（脚本版） =====\n');
+fprintf('===== 1/3：绕圈航点生成检查（脚本版） =====\n');
 run('tests/test_make_orbit_plan.m');
 
-fprintf('\n===== 2/2：仿真判定检查（框架版） =====\n');
+fprintf('\n===== 2/3：LLM 路线校验层检查（脚本版） =====\n');
+run('tests/test_check_route_spec.m');
+
+fprintf('\n===== 3/3：仿真判定检查（框架版） =====\n');
 res = runtests('tests/test_check_orbit_flight.m');
 disp(res);
