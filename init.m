@@ -1,7 +1,11 @@
 close all;
 clc;
 clear all;
-load("aerodata.mat");
+% 气动数据由下方 airdate 从 Excel 重建，无需预先存在 aerodata.mat。
+if ~isfile('fly_planfjy.mat')
+    error('init:MissingFlightPlan', ...
+        '缺少 fly_planfjy.mat，请先运行 Astar 和 dubins_path_planning 生成航路。');
+end
 load('fly_planfjy.mat');
 %几何参数
 b_ref = 2.24;  % 参考展长
@@ -47,7 +51,6 @@ W_down = 0;
 
 airdate;
 controller;
-target;
 theta_t = 0;
 psi_t = 0;
 V_t = 0;

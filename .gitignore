@@ -27,3 +27,4 @@ _view_fig.png
 # 本地论文对照文件和提取缓存
 /*.compare.pdf
 /tmp/
+/资料/local/
