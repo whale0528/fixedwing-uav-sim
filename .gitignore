@@ -23,3 +23,7 @@ _view_fig.png
 
 # 资料目录下的 PDF（版权与体积，不入库）
 资料/*.pdf
+
+# 本地论文对照文件和提取缓存
+/*.compare.pdf
+/tmp/

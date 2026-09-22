@@ -6,6 +6,10 @@ function report = run_llm_mission(instruction, opt)
 %   report = run_llm_mission("向北飞2000米后绕训练空域中心半径500米顺时针转两圈")
 %   plot_traj_topview
 %
+% 只看计划、不跑仿真（秒出图）：
+%   report = run_llm_mission("向北飞2000米后绕训练空域中心顺时针转两圈", 'RunSim', false)
+%   plot_plan_topview(report)        % 计划路线俯视图（不载模型、不仿真）
+%
 % 可选参数：
 %   LandmarksFile 地标表文件（默认 landmarks.xlsx；**同时作为 LLM 的可用地标白名单**，
 %                 往表里加地标即可让 LLM 认识新地点）
@@ -71,7 +75,12 @@ function report = run_llm_mission(instruction, opt)
     fprintf('[3/5] 航点：%d 行，计划路径 %.0f m，预计仿真 %.0f s\n', n, total_len, total_len/32 + 4);
 
     if ~opt.RunSim
-        fprintf('      （RunSim=false，跳过确认与仿真）\n');
+        % 与跑仿真的分支保持一致：把计划和航点放到 base 工作区，便于画图/查看
+        assignin('base', 'fly_pt', fly_pt);
+        assignin('base', 'num_fly_pt', n);
+        assignin('base', 'plan', plan);
+        fprintf('      （RunSim=false，跳过确认与仿真；已把 fly_pt/plan 放到 base）\n');
+        fprintf('      看计划图： plot_plan_topview(report)   或   plot_plan_topview\n');
         return;
     end
 
